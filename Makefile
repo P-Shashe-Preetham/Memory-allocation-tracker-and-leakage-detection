@@ -1,142 +1,95 @@
-# =============================================================================
-# Makefile - Dynamic Memory Allocation Tracker & Leak Detector
-# Compatible with Ubuntu Linux / WSL
-# =============================================================================
+# Makefile for MemWatch — Linux Memory Monitor and Leak Detector in C
 
-CC ?= gcc
-AR ?= ar
-RM := rm -rf
+CC          ?= gcc
+STD_FLAGS   := -std=c11 -Wall -Wextra -Wpedantic
+OPT_FLAGS   ?= -O2
+INCLUDES    := -Iinclude
 
-# Compilation Flags
-STD_FLAGS     := -std=c11
-WARN_FLAGS    := -Wall -Wextra -Wpedantic -Wconversion
-OPT_FLAGS     := -g -O2
-INC_FLAGS     := -Iinclude
-THREAD_FLAGS  := -pthread
+# Resolve libxml2 flags via pkg-config, falling back to xml2-config or direct libxml2.so.2
+XML2_CFLAGS := $(shell pkg-config --cflags libxml-2.0 2>/dev/null || xml2-config --cflags 2>/dev/null || echo "-Iinclude/compat")
+XML2_LIBS   := $(shell pkg-config --libs libxml-2.0 2>/dev/null || xml2-config --libs 2>/dev/null || echo "-l:libxml2.so.2")
 
-# Sanitizer Flags (Used with 'make asan' or 'make SANITIZER=1')
-ASAN_FLAGS    := -fsanitize=address,undefined -fno-omit-frame-pointer
+CFLAGS      := $(STD_FLAGS) $(OPT_FLAGS) $(INCLUDES) $(XML2_CFLAGS)
+LDFLAGS     := $(XML2_LIBS) -lm
 
-CFLAGS        ?= $(STD_FLAGS) $(WARN_FLAGS) $(OPT_FLAGS) $(INC_FLAGS) $(THREAD_FLAGS)
-LDFLAGS       ?= $(THREAD_FLAGS)
-ARFLAGS       := rcs
+SAN_FLAGS   := -fsanitize=address,undefined -fno-omit-frame-pointer -g -O1
 
-# Check if SANITIZER option is enabled
-ifeq ($(strip $(SANITIZER)), 1)
-    CFLAGS  += $(ASAN_FLAGS)
-    LDFLAGS += $(ASAN_FLAGS)
-endif
+PREFIX      ?= /usr/local
+BINDIR      := $(PREFIX)/bin
 
-# Directories
-SRC_DIR       := src
-INC_DIR       := include
-TEST_DIR      := tests
-OBJ_DIR       := obj
-BIN_DIR       := bin
-LIB_DIR       := lib
+TARGET      := memwatch
+BUILD_DIR   := build
 
-# Targets
-LIB_STATIC    := $(LIB_DIR)/libmemtrack.a
-DEMO_BIN      := $(BIN_DIR)/memory_tracker_demo
-TEST_BIN      := $(BIN_DIR)/test_memory_tracker
+LIB_SRCS    := src/cli.c \
+               src/proc_reader.c \
+               src/system_memory.c \
+               src/monitor.c \
+               src/leak_analyzer.c \
+               src/valgrind_parser.c \
+               src/report.c \
+               src/utils.c
 
-# Source & Object Files
-TRACKER_SRC   := $(SRC_DIR)/memory_tracker.c
-MAIN_SRC      := $(SRC_DIR)/main.c
-TEST_SRC      := $(TEST_DIR)/test_memory_tracker.c
+MAIN_SRC    := src/main.c
+LIB_OBJS    := $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(LIB_SRCS))
+MAIN_OBJ    := $(BUILD_DIR)/main.o
 
-TRACKER_OBJ   := $(OBJ_DIR)/memory_tracker.o
-MAIN_OBJ      := $(OBJ_DIR)/main.o
-TEST_OBJ      := $(OBJ_DIR)/test_memory_tracker.o
+TEST_BINS   := $(BUILD_DIR)/test_proc_reader \
+               $(BUILD_DIR)/test_memory_calculations \
+               $(BUILD_DIR)/test_growth_detection \
+               $(BUILD_DIR)/test_report_parser
 
-# Default Target
-.PHONY: all
-all: directories $(LIB_STATIC) $(DEMO_BIN) $(TEST_BIN)
-	@echo "Build complete. Executables ready in $(BIN_DIR)/"
+HELPER_BINS := tests/leak_target tests/mock_valgrind
 
-# Ensure output directories exist
-.PHONY: directories
-directories:
-	@mkdir -p $(OBJ_DIR) $(BIN_DIR) $(LIB_DIR)
+.PHONY: all test clean install debug sanitize
 
-# Static Library
-$(LIB_STATIC): $(TRACKER_OBJ)
-	@echo "Creating static library $(LIB_STATIC)..."
-	$(AR) $(ARFLAGS) $@ $^
+all: $(TARGET) tests/leak_target
 
-# Object Compilation Rules
-$(OBJ_DIR)/memory_tracker.o: $(TRACKER_SRC) $(INC_DIR)/memory_tracker.h | directories
-	@echo "Compiling $<..."
+$(BUILD_DIR):
+	@mkdir -p $(BUILD_DIR)
+
+$(BUILD_DIR)/%.o: src/%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(OBJ_DIR)/main.o: $(MAIN_SRC) $(INC_DIR)/memory_tracker.h | directories
-	@echo "Compiling $<..."
-	$(CC) $(CFLAGS) -c $< -o $@
+$(TARGET): $(MAIN_OBJ) $(LIB_OBJS)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 
-$(OBJ_DIR)/test_memory_tracker.o: $(TEST_SRC) $(INC_DIR)/memory_tracker.h | directories
-	@echo "Compiling $<..."
-	$(CC) $(CFLAGS) -c $< -o $@
+tests/leak_target: tests/leak_target.c
+	$(CC) $(STD_FLAGS) -g -O0 $< -o $@
 
-# Executables
-$(DEMO_BIN): $(MAIN_OBJ) $(LIB_STATIC) | directories
-	@echo "Linking demonstration binary $(DEMO_BIN)..."
-	$(CC) $(MAIN_OBJ) $(LIB_STATIC) $(LDFLAGS) -o $@
+tests/mock_valgrind: tests/mock_valgrind.c
+	$(CC) $(STD_FLAGS) -g -O0 $< -o $@
 
-$(TEST_BIN): $(TEST_OBJ) $(LIB_STATIC) | directories
-	@echo "Linking test binary $(TEST_BIN)..."
-	$(CC) $(TEST_OBJ) $(LIB_STATIC) $(LDFLAGS) -o $@
+$(BUILD_DIR)/test_%: tests/test_%.c $(LIB_OBJS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -g $< $(LIB_OBJS) -o $@ $(LDFLAGS)
 
-# Run Targets
-.PHONY: run
-run: $(DEMO_BIN)
-	@echo "Running Demonstration Suite..."
-	@$(DEMO_BIN)
+test: $(TEST_BINS) $(HELPER_BINS)
+	@echo "=== Running MemWatch Unit Test Suite ==="
+	./$(BUILD_DIR)/test_proc_reader
+	./$(BUILD_DIR)/test_memory_calculations
+	./$(BUILD_DIR)/test_growth_detection
+	./$(BUILD_DIR)/test_report_parser
+	@echo "=== All unit tests passed ==="
 
-.PHONY: test
-test: $(TEST_BIN)
-	@echo "Executing Automated Test Suite..."
-	@$(TEST_BIN)
+debug: OPT_FLAGS := -g -O0 -DDEBUG
+debug: clean all
 
-# Build with AddressSanitizer and UndefinedBehaviorSanitizer
-.PHONY: asan
-asan: clean
-	@echo "Building with AddressSanitizer and UndefinedBehaviorSanitizer..."
-	@$(MAKE) SANITIZER=1 all
-	@echo "ASan build complete. Note: Intentional leak tests will trigger ASan leak reports."
+sanitize: $(HELPER_BINS) | $(BUILD_DIR)
+	@echo "=== Building & Running Sanitized Tests (ASan + UBSan) ==="
+	$(CC) $(STD_FLAGS) $(SAN_FLAGS) $(INCLUDES) $(XML2_CFLAGS) tests/test_proc_reader.c $(LIB_SRCS) -o $(BUILD_DIR)/san_test_proc_reader $(LDFLAGS)
+	$(CC) $(STD_FLAGS) $(SAN_FLAGS) $(INCLUDES) $(XML2_CFLAGS) tests/test_memory_calculations.c $(LIB_SRCS) -o $(BUILD_DIR)/san_test_memory_calculations $(LDFLAGS)
+	$(CC) $(STD_FLAGS) $(SAN_FLAGS) $(INCLUDES) $(XML2_CFLAGS) tests/test_growth_detection.c $(LIB_SRCS) -o $(BUILD_DIR)/san_test_growth_detection $(LDFLAGS)
+	$(CC) $(STD_FLAGS) $(SAN_FLAGS) $(INCLUDES) $(XML2_CFLAGS) tests/test_report_parser.c $(LIB_SRCS) -o $(BUILD_DIR)/san_test_report_parser $(LDFLAGS)
+	./$(BUILD_DIR)/san_test_proc_reader
+	./$(BUILD_DIR)/san_test_memory_calculations
+	./$(BUILD_DIR)/san_test_growth_detection
+	./$(BUILD_DIR)/san_test_report_parser
+	@echo "=== All sanitized tests passed with zero memory/UB errors ==="
 
-# Audit Target: Runs static analysis with GCC -fanalyzer, strict pedantic checks, and test suite
-.PHONY: audit
-audit: all
-	@echo "============================================================"
-	@echo " Running Security & Code Quality Audit"
-	@echo "============================================================"
-	@echo "[1/3] Running GCC -fanalyzer Deep Static Analysis..."
-	@$(CC) $(STD_FLAGS) $(WARN_FLAGS) -Werror -fanalyzer $(INC_FLAGS) $(THREAD_FLAGS) -c $(TRACKER_SRC) -o /dev/null
-	@$(CC) $(STD_FLAGS) $(WARN_FLAGS) -Werror -fanalyzer $(INC_FLAGS) $(THREAD_FLAGS) -c $(MAIN_SRC) -o /dev/null
-	@$(CC) $(STD_FLAGS) $(WARN_FLAGS) -Werror -fanalyzer $(INC_FLAGS) $(THREAD_FLAGS) -c $(TEST_SRC) -o /dev/null
-	@echo "[PASS] Static Analysis: 0 warnings, 0 errors with -Werror and -fanalyzer."
-	@echo "[2/3] Executing Automated Unit & Integration Tests..."
-	@$(TEST_BIN)
-	@echo "[3/3] Validating Zero-Leak Execution..."
-	@$(DEMO_BIN) --all-clean > /dev/null
-	@echo "[PASS] All audit checks passed successfully."
+install: $(TARGET)
+	install -d $(DESTDIR)$(BINDIR)
+	install -m 0755 $(TARGET) $(DESTDIR)$(BINDIR)/$(TARGET)
 
-# Clean Target
-.PHONY: clean
 clean:
-	@echo "Cleaning build artifacts..."
-	$(RM) $(OBJ_DIR) $(BIN_DIR) $(LIB_DIR)
-	@echo "Clean complete."
-
-# Help Target
-.PHONY: help
-help:
-	@echo "Dynamic Memory Allocation Tracker & Leak Detector"
-	@echo "Available Make Targets:"
-	@echo "  make           - Build static library, demo executable, and test suite"
-	@echo "  make test      - Build and run the automated test suite"
-	@echo "  make run       - Build and execute standard demonstration program"
-	@echo "  make asan      - Rebuild everything with AddressSanitizer enabled"
-	@echo "  make audit     - Run static analysis with GCC -fanalyzer and full audit"
-	@echo "  make clean     - Remove all build directories and binaries"
-	@echo "  make help      - Display this help message"
+	rm -f $(BUILD_DIR)/* $(TARGET) $(HELPER_BINS)
+	rmdir $(BUILD_DIR) 2>/dev/null || true
+	rm -f reports/valgrind_*.xml reports/memwatch_report_*.txt reports/latest_report.txt

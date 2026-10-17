@@ -1,25 +1,10 @@
-# Build artifacts
-obj/
-bin/
-lib/
+build/
+memwatch
+tests/leak_target
+tests/mock_valgrind
+reports/valgrind_*.xml
+reports/memwatch_report_*.txt
+reports/latest_report.txt
 *.o
-*.a
-*.so
-*.dylib
-
-# Debug symbols
-*.dSYM/
-*.gdb
-
-# Core dumps
+*.out
 core
-core.*
-
-# Editor and OS files
-.DS_Store
-Thumbs.db
-*.swp
-*.swo
-*~
-.vscode/
-.idea/
