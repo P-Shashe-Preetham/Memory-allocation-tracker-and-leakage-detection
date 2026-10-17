@@ -1,0 +1,25 @@
+# Build artifacts
+obj/
+bin/
+lib/
+*.o
+*.a
+*.so
+*.dylib
+
+# Debug symbols
+*.dSYM/
+*.gdb
+
+# Core dumps
+core
+core.*
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
