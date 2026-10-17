@@ -9,6 +9,7 @@
 #include <string.h>
 #include <assert.h>
 #include <stdint.h>
+#include <pthread.h>
 
 /* Test Runner State */
 static int g_tests_run = 0;
@@ -334,6 +335,92 @@ static bool test_zero_allocations_behavior(void) {
     return true;
 }
 
+/**
+ * Test 14: Verify realloc of previously freed pointer is safely intercepted
+ */
+static bool test_realloc_of_freed_pointer(void) {
+    FILE *devnull = fopen("/dev/null", "w");
+    if (devnull) tracker_set_output_stream(devnull);
+
+    void *ptr = MALLOC(64);
+    TEST_ASSERT(ptr != NULL, "MALLOC failed");
+    FREE(ptr);
+
+    void *res = REALLOC(ptr, 128);
+
+    tracker_set_output_stream(stdout);
+    if (devnull) fclose(devnull);
+
+    TEST_ASSERT(res == NULL, "REALLOC on previously freed pointer must return NULL");
+
+    TrackerStats stats;
+    tracker_get_stats(&stats);
+    TEST_ASSERT(stats.untracked_realloc_attempts == 1, "Untracked realloc attempts must be 1");
+    TEST_ASSERT(stats.current_active_blocks == 0, "Active blocks must remain 0");
+    return true;
+}
+
+/**
+ * Test 15: Verify peak memory watermark tracking
+ */
+static bool test_peak_memory_watermark(void) {
+    void *p1 = MALLOC(100);
+    void *p2 = MALLOC(200);
+    void *p3 = MALLOC(300);
+
+    TrackerStats stats;
+    tracker_get_stats(&stats);
+    TEST_ASSERT(stats.peak_active_blocks == 3, "Peak blocks must be 3");
+    TEST_ASSERT(stats.peak_active_bytes == 600, "Peak bytes must be 600");
+
+    FREE(p2);
+    tracker_get_stats(&stats);
+    TEST_ASSERT(stats.current_active_blocks == 2, "Current active blocks must decrease to 2");
+    TEST_ASSERT(stats.peak_active_blocks == 3, "Peak active blocks must remain at high watermark (3)");
+    TEST_ASSERT(stats.peak_active_bytes == 600, "Peak active bytes must remain at high watermark (600)");
+
+    FREE(p1);
+    FREE(p3);
+    return true;
+}
+
+/* Worker function for concurrent multithreading test */
+static void *concurrency_worker(void *arg) {
+    (void)arg;
+    for (int i = 0; i < 50; ++i) {
+        void *p = MALLOC(64);
+        assert(p != NULL);
+        void *p2 = REALLOC(p, 128);
+        assert(p2 != NULL);
+        FREE(p2);
+    }
+    return NULL;
+}
+
+/**
+ * Test 16: Verify thread-safety under concurrent multi-threaded execution
+ */
+static bool test_multithreaded_concurrency(void) {
+    const int NUM_THREADS = 4;
+    pthread_t threads[4];
+
+    for (int i = 0; i < NUM_THREADS; ++i) {
+        int rc = pthread_create(&threads[i], NULL, concurrency_worker, NULL);
+        TEST_ASSERT(rc == 0, "pthread_create failed");
+    }
+
+    for (int i = 0; i < NUM_THREADS; ++i) {
+        pthread_join(threads[i], NULL);
+    }
+
+    TrackerStats stats;
+    tracker_get_stats(&stats);
+    TEST_ASSERT(stats.current_active_blocks == 0, "All concurrent allocations must be freed");
+    TEST_ASSERT(stats.total_allocations == (size_t)(NUM_THREADS * 50), "Total allocations must equal 200");
+    TEST_ASSERT(stats.total_frees == (size_t)(NUM_THREADS * 50), "Total frees must equal 200");
+    return true;
+}
+
 /* ========================================================================= */
 /* Test Main Runner                                                          */
 /* ========================================================================= */
@@ -358,6 +445,9 @@ int main(void) {
     RUN_TEST(test_realloc_null_input);
     RUN_TEST(test_realloc_zero_size);
     RUN_TEST(test_zero_allocations_behavior);
+    RUN_TEST(test_realloc_of_freed_pointer);
+    RUN_TEST(test_peak_memory_watermark);
+    RUN_TEST(test_multithreaded_concurrency);
 
     printf(ANSI_BOLD "\n============================================================\n" ANSI_RESET);
     printf(ANSI_BOLD " Test Results: %d/%d passed (%d failed)\n" ANSI_RESET,

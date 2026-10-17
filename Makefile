@@ -104,6 +104,23 @@ asan: clean
 	@$(MAKE) SANITIZER=1 all
 	@echo "ASan build complete. Note: Intentional leak tests will trigger ASan leak reports."
 
+# Audit Target: Runs static analysis with GCC -fanalyzer, strict pedantic checks, and test suite
+.PHONY: audit
+audit: all
+	@echo "============================================================"
+	@echo " Running Security & Code Quality Audit"
+	@echo "============================================================"
+	@echo "[1/3] Running GCC -fanalyzer Deep Static Analysis..."
+	@$(CC) $(STD_FLAGS) $(WARN_FLAGS) -Werror -fanalyzer $(INC_FLAGS) $(THREAD_FLAGS) -c $(TRACKER_SRC) -o /dev/null
+	@$(CC) $(STD_FLAGS) $(WARN_FLAGS) -Werror -fanalyzer $(INC_FLAGS) $(THREAD_FLAGS) -c $(MAIN_SRC) -o /dev/null
+	@$(CC) $(STD_FLAGS) $(WARN_FLAGS) -Werror -fanalyzer $(INC_FLAGS) $(THREAD_FLAGS) -c $(TEST_SRC) -o /dev/null
+	@echo "[PASS] Static Analysis: 0 warnings, 0 errors with -Werror and -fanalyzer."
+	@echo "[2/3] Executing Automated Unit & Integration Tests..."
+	@$(TEST_BIN)
+	@echo "[3/3] Validating Zero-Leak Execution..."
+	@$(DEMO_BIN) --all-clean > /dev/null
+	@echo "[PASS] All audit checks passed successfully."
+
 # Clean Target
 .PHONY: clean
 clean:
@@ -120,5 +137,6 @@ help:
 	@echo "  make test      - Build and run the automated test suite"
 	@echo "  make run       - Build and execute standard demonstration program"
 	@echo "  make asan      - Rebuild everything with AddressSanitizer enabled"
+	@echo "  make audit     - Run static analysis with GCC -fanalyzer and full audit"
 	@echo "  make clean     - Remove all build directories and binaries"
 	@echo "  make help      - Display this help message"
